@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, isDatabaseConfigured } from "@/lib/db";
 import { sendConfirmationEmail, sendReferralJumpEmail } from "@/lib/email";
 import { getTier } from "@/lib/tiers";
+import { getInitialCount } from "@/lib/waitlist-count";
 
 export const runtime = "nodejs";
 
@@ -44,10 +45,6 @@ function referralCode(email: string) {
   return createHash("sha256").update(email).digest("base64url").slice(0, 9).toLowerCase();
 }
 
-function getInitialCount() {
-  return Number(process.env.WAITLIST_INITIAL_COUNT ?? 37);
-}
-
 async function triggerWebhook(data: Record<string, unknown>) {
   const webhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL || process.env.WEBHOOK_URL;
   if (!webhookUrl) return;
@@ -64,6 +61,13 @@ async function triggerWebhook(data: Record<string, unknown>) {
 }
 
 async function saveToLocalDiskStore(record: Record<string, unknown>) {
+  // Vercel's deployment filesystem is read-only outside /tmp, so mkdir here
+  // throws EROFS on EVERY signup in production. It was caught and logged, so
+  // signups still succeeded, but it buried a guaranteed error in the logs on
+  // the one code path where a real failure most needs to be visible.
+  // Postgres is the system of record; this file is only a local dev safety net.
+  if (process.env.VERCEL) return;
+
   try {
     const dataDir = path.join(process.cwd(), ".data");
     await fs.mkdir(dataDir, { recursive: true });
@@ -202,10 +206,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Allowlist, not sanitize. `targetLanguage` is interpolated unescaped into
+    // the confirmation email's subject AND html (lib/email.ts:75-77). This route
+    // is public and unauthenticated, so a free-text value let anyone have Resend
+    // deliver attacker-authored markup from the verified thelingo.xyz sender.
+    // Anything unrecognized falls back to the default rather than being echoed.
+    const ALLOWED_LANGUAGES = [
+      "Spanish", "French", "Japanese", "German",
+      "Italian", "Mandarin", "Portuguese", "Another language",
+    ];
+    const requestedLanguage = body.targetLanguage?.trim();
+    const safeLanguage = ALLOWED_LANGUAGES.includes(requestedLanguage ?? "")
+      ? requestedLanguage
+      : undefined;
+
+    // Free-text qualifiers are never emailed, but they do hit unbounded TEXT
+    // columns on a public endpoint. Cap them.
+    const cap = (v: string | undefined) => v?.trim().slice(0, 200);
+
     const qualifier: Qualifier = {
-      targetLanguage: body.targetLanguage?.trim(),
-      currentMethod: body.currentMethod?.trim(),
-      previousFrustration: body.previousFrustration?.trim(),
+      targetLanguage: safeLanguage,
+      currentMethod: cap(body.currentMethod),
+      previousFrustration: cap(body.previousFrustration),
     };
 
     const hasPersistentStore = isDatabaseConfigured();
@@ -248,6 +270,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      // The hero counter needs this: a repeat submit must not bump the total.
+      isNew: result.isNew,
       signupNumber: result.signupNumber,
       position: result.position,
       referralCode: result.code,

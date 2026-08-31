@@ -60,6 +60,40 @@ type ResultData = {
   reason: string;
 };
 
+const TIERS = ["Pass", "Mid", "Fail"] as const;
+
+/**
+ * `/api/grade-demo` answers with `{ error: string }` on 400/500. That payload has
+ * no `tier`, so handing it straight to `setResult` made the render call
+ * `result.tier.toLowerCase()` on `undefined`. There is no error boundary around
+ * the hero, so React tore down the whole root and the entire landing page went
+ * blank. Every response is validated here before it can reach render.
+ */
+function isResultData(value: unknown): value is ResultData {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    TIERS.includes(v.tier as (typeof TIERS)[number]) &&
+    typeof v.displayAccuracy === "number" &&
+    Number.isFinite(v.displayAccuracy) &&
+    typeof v.fsChange === "number" &&
+    Number.isFinite(v.fsChange) &&
+    typeof v.newRank === "string" &&
+    typeof v.reason === "string"
+  );
+}
+
+const FALLBACK_RESULT: ResultData = {
+  tier: "Mid",
+  displayAccuracy: 75,
+  fsChange: 45,
+  newRank: "Maintained Bronze I",
+  reason: "Evaluation server busy. Basic conversational structure recognized!",
+};
+
+/** Upper bound on how long the UI will sit on "Evaluating..." before falling back. */
+const GRADE_TIMEOUT_MS = 12_000;
+
 export function InteractiveJudgeDemo() {
   const [selectedLanguage, setSelectedLanguage] = useState<Language>("Spanish");
   const [userAnswer, setUserAnswer] = useState("");
@@ -92,6 +126,9 @@ export function InteractiveJudgeDemo() {
   }
 
   const inputRef = useRef<HTMLInputElement>(null);
+  // Identifies the match a pending grade belongs to. Bumped by every submit and
+  // every reset so a late response cannot land on an abandoned match.
+  const submissionRef = useRef(0);
 
   const activePrompt = PROMPTS[selectedLanguage];
   const wordCount = userAnswer.trim() ? userAnswer.trim().split(/\s+/).length : 0;
@@ -120,11 +157,15 @@ export function InteractiveJudgeDemo() {
   }, [isTimerActive, timeLeft, isEvaluating, result, isExpired]);
 
   function resetMatchState() {
+    // Abandons any in-flight grade so its response is discarded instead of
+    // rendering a verdict for the previous answer/language.
+    submissionRef.current += 1;
     setUserAnswer("");
     setResult(null);
     setTimeLeft(30);
     setIsTimerActive(false);
     setIsExpired(false);
+    setIsEvaluating(false);
   }
 
   function handleLanguageChange(lang: Language) {
@@ -149,7 +190,10 @@ export function InteractiveJudgeDemo() {
     if (result) setResult(null);
   }
 
-  function useSampleAnswer() {
+  // NOT named `useSampleAnswer`: React's lint rules and the React Compiler treat
+  // any `use*` function as a hook, which makes an ordinary click handler look
+  // like a conditionally-called hook.
+  function fillSampleAnswer() {
     startTimerIfNeeded();
     setUserAnswer(activePrompt.sampleAnswer);
     if (result) setResult(null);
@@ -159,35 +203,43 @@ export function InteractiveJudgeDemo() {
     e.preventDefault();
     if (!userAnswer.trim() || isEvaluating || isExpired) return;
 
+    const submissionId = submissionRef.current + 1;
+    submissionRef.current = submissionId;
+
     setIsTimerActive(false);
     setIsEvaluating(true);
     setResult(null);
+
+    // A hung serverless invocation must not strand the UI on "Evaluating..."
+    // forever; abort and show the fallback verdict instead.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), GRADE_TIMEOUT_MS);
 
     try {
       const response = await fetch("/api/grade-demo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ language: selectedLanguage, answer: userAnswer }),
+        signal: controller.signal,
       });
 
-      const data = (await response.json()) as ResultData;
+      const payload: unknown = response.ok ? await response.json() : null;
+
       // Brief suspenseful evaluation beat + drawer reveal anticipation
       await new Promise((res) => setTimeout(res, 1200));
+      if (submissionRef.current !== submissionId) return;
 
+      const data = isResultData(payload) ? payload : FALLBACK_RESULT;
       setResult(data);
-      if (!personalBest || data.displayAccuracy > personalBest) {
+      if (personalBest === null || data.displayAccuracy > personalBest) {
         setPersonalBest(data.displayAccuracy);
       }
     } catch {
-      setResult({
-        tier: "Mid",
-        displayAccuracy: 75,
-        fsChange: 45,
-        newRank: "Maintained Bronze I",
-        reason: "Evaluation server busy. Basic conversational structure recognized!",
-      });
+      if (submissionRef.current !== submissionId) return;
+      setResult(FALLBACK_RESULT);
     } finally {
-      setIsEvaluating(false);
+      clearTimeout(timeoutId);
+      if (submissionRef.current === submissionId) setIsEvaluating(false);
     }
   }
 
@@ -277,7 +329,7 @@ export function InteractiveJudgeDemo() {
               <button
                 type="button"
                 className="sample-answer-btn"
-                onClick={useSampleAnswer}
+                onClick={fillSampleAnswer}
                 disabled={isEvaluating || isExpired}
               >
                 Auto-fill sample answer 🪄

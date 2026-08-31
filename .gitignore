@@ -8,3 +8,7 @@ npm-debug.log*
 thelingo-waitlist.zip
 .vercel
 .data
+.gstack/
+.agents/
+.claude/
+skills-lock.json

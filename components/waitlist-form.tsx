@@ -2,12 +2,17 @@
 
 import Link from "next/link";
 import { FormEvent, useMemo, useRef, useState } from "react";
+import { WAITLIST_JOINED_EVENT, type WaitlistJoinedDetail } from "./joined-count";
 import { ArrowIcon } from "./nav";
 
 type Tier = { name: string; emoji: string; threshold: number };
 
 type SignupResult = {
   position: number;
+  /** Offset + row id. This is the person's RANK, not the list population. */
+  signupNumber?: number;
+  /** False when this email was already on the list, so the counter must not move. */
+  isNew?: boolean;
   referralCode: string;
   revealPosition: boolean;
   previewMode: boolean;
@@ -108,6 +113,15 @@ export function WaitlistForm({
       setResult(payload);
       setStep("success");
       setStatus("idle");
+
+      // Tell the hero counter a person was added. It increments by one rather
+      // than jumping to `signupNumber`, because that value is a RANK and runs
+      // ahead of the real population.
+      window.dispatchEvent(
+        new CustomEvent<WaitlistJoinedDetail>(WAITLIST_JOINED_EVENT, {
+          detail: { isNew: payload.isNew },
+        }),
+      );
     } catch (caught) {
       setStatus("error");
       setError(caught instanceof Error ? caught.message : "Your spot could not be saved right now. Please try again.");
@@ -161,11 +175,19 @@ export function WaitlistForm({
             <p>We will email your first match invitation directly when the {targetLanguage} queue opens.</p>
           </>
         )}
+        {/* `founding-badge`, NOT `tier-badge`: `.tier-badge` is also the demo's
+            verdict chip (globals.css:1983, declared after this one), so the two
+            components were fighting over the same selector. Combined with
+            `.signup-success` inheriting white text, the badge rendered white on
+            near-white and was invisible.
+            The string matches lib/email.ts `tierBadgeHtml` exactly so the badge
+            a person sees on the site is the badge they get in their email. */}
         {result.tier ? (
-          <div className="tier-badge">
-            <span className="tier-badge-label">Founding Member Badge</span>
-            <span className="tier-badge-name">
-              {result.tier.emoji} {result.tier.name}
+          <div className="founding-badge">
+            <span className="founding-badge-label">Founding Member Badge</span>
+            <span className="founding-badge-name">
+              {result.tier.emoji} {result.tier.name} &mdash; Rank #
+              {result.position.toLocaleString()}
             </span>
           </div>
         ) : null}
@@ -175,7 +197,7 @@ export function WaitlistForm({
             Share link <ArrowIcon />
           </button>
         </div>
-        <span className="share-destinations">Sharing moves you up 10 spots per signup - and we'll email you the moment it happens.</span>
+        <span className="share-destinations">Sharing moves you up 10 spots per signup - and we&apos;ll email you the moment it happens.</span>
         {result.previewMode ? (
           <small className="preview-note">Local preview mode active until database environment is configured.</small>
         ) : null}

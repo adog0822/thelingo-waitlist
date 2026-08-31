@@ -5,12 +5,12 @@ import { HeroSection } from "./hero-section";
 import { ProductWorldGrid } from "./micro-societies";
 import { WaitlistForm } from "./waitlist-form";
 
-export function LandingPage() {
+export function LandingPage({ waitlistCount }: { waitlistCount: number }) {
   const [showFlags, setShowFlags] = useState(true);
 
   return (
     <main>
-      <HeroSection />
+      <HeroSection waitlistCount={waitlistCount} />
 
       <section className="world-section" id="world">
         <div className="world-heading-stacked">
