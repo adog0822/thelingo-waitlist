@@ -2,13 +2,27 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
+import { getDb, isDatabaseConfigured } from "@/lib/db";
+import { sendConfirmationEmail, sendReferralJumpEmail } from "@/lib/email";
+import { getTier } from "@/lib/tiers";
 
 export const runtime = "nodejs";
+
+type Qualifier = { targetLanguage?: string; currentMethod?: string; previousFrustration?: string };
+
+type JoinResult = {
+  signupNumber: number;
+  position: number;
+  code: string;
+  isNew: boolean;
+  referrerNotify: { email: string; targetLanguage?: string; previousPosition: number; newPosition: number } | null;
+};
 
 type PreviewStore = {
   positions: Map<string, number>;
   referrals: Map<string, number>;
-  qualifiers: Map<string, { targetLanguage?: string; currentMethod?: string; previousFrustration?: string }>;
+  qualifiers: Map<string, Qualifier>;
+  order: string[];
 };
 
 declare global {
@@ -20,7 +34,8 @@ const previewStore =
   (globalThis.theLingoPreviewStore = {
     positions: new Map<string, number>(),
     referrals: new Map<string, number>(),
-    qualifiers: new Map<string, { targetLanguage?: string; currentMethod?: string; previousFrustration?: string }>(),
+    qualifiers: new Map<string, Qualifier>(),
+    order: [],
   });
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -29,37 +44,8 @@ function referralCode(email: string) {
   return createHash("sha256").update(email).digest("base64url").slice(0, 9).toLowerCase();
 }
 
-async function sendResendConfirmation(email: string, targetLanguage?: string, referralCodeStr?: string) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return;
-
-  const fromEmail = process.env.RESEND_FROM_EMAIL || "TheLingo Placement <onboarding@resend.dev>";
-  const lang = targetLanguage || "Spanish";
-
-  try {
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: [email],
-        subject: `Your ${lang} Placement Spot is Reserved | TheLingo`,
-        html: `
-          <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; color: #101114;">
-            <h2 style="font-size: 24px; font-weight: 900;">Your ${lang} placement spot is reserved.</h2>
-            <p>We will deliver your initial placement match invitation directly when your language cohort opens.</p>
-            <p>Your referral link: <strong>https://thelingo.app/waitlist?ref=${referralCodeStr}</strong></p>
-            <p style="color: #666; font-size: 13px;">Share your link with study partners to jump ahead by 10 spots for each referral.</p>
-          </div>
-        `,
-      }),
-    });
-  } catch (err) {
-    console.error("Resend email delivery failed:", err);
-  }
+function getInitialCount() {
+  return Number(process.env.WAITLIST_INITIAL_COUNT ?? 37);
 }
 
 async function triggerWebhook(data: Record<string, unknown>) {
@@ -98,73 +84,80 @@ async function saveToLocalDiskStore(record: Record<string, unknown>) {
   }
 }
 
-async function redis(command: Array<string | number>) {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  if (!url || !token) return null;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(command),
-    cache: "no-store",
-  });
-
-  if (!response.ok) throw new Error("The waitlist store could not be reached.");
-  const payload = (await response.json()) as { result: unknown };
-  return payload.result;
-}
-
-async function joinPersistentWaitlist(
+async function joinPostgresWaitlist(
   email: string,
-  referringCode?: string,
-  qualifier?: { targetLanguage?: string; currentMethod?: string; previousFrustration?: string },
-) {
-  const initialCount = Number(process.env.WAITLIST_INITIAL_COUNT ?? 0);
+  referringCode: string | undefined,
+  qualifier: Qualifier,
+): Promise<JoinResult> {
+  const sql = await getDb();
+  const initialCount = getInitialCount();
   const code = referralCode(email);
-  const emailKey = `thelingo:email:${createHash("sha256").update(email).digest("hex")}`;
-  const added = Number(await redis(["SETNX", emailKey, code]));
+  const validReferredBy = referringCode && referringCode !== code ? referringCode : null;
 
-  let signupNumber: number;
-  if (added === 1) {
-    signupNumber = initialCount + Number(await redis(["INCR", "thelingo:signup-count"]));
-    await redis(["HSET", "thelingo:positions", code, signupNumber]);
-    if (referringCode && referringCode !== code) {
-      await redis(["HINCRBY", "thelingo:referrals", referringCode, 1]);
-    }
+  const inserted = await sql`
+    INSERT INTO waitlist_entries (email, referral_code, referred_by, target_language, current_method, previous_frustration)
+    VALUES (${email}, ${code}, ${validReferredBy}, ${qualifier.targetLanguage ?? null}, ${qualifier.currentMethod ?? null}, ${qualifier.previousFrustration ?? null})
+    ON CONFLICT (email) DO NOTHING
+    RETURNING id
+  `;
+
+  let id: number;
+  let isNew: boolean;
+  if (inserted.length > 0) {
+    id = inserted[0].id as number;
+    isNew = true;
   } else {
-    signupNumber = Number(await redis(["HGET", "thelingo:positions", code]));
+    const existing = await sql`SELECT id FROM waitlist_entries WHERE email = ${email}`;
+    id = existing[0].id as number;
+    isNew = false;
   }
 
-  if (qualifier && Object.keys(qualifier).length > 0) {
-    await redis(["HSET", `thelingo:qualifier:${code}`, "data", JSON.stringify(qualifier)]);
+  const signupNumber = initialCount + id;
+  const referralWinsRows = await sql`SELECT COUNT(*)::int AS count FROM waitlist_entries WHERE referred_by = ${code}`;
+  const referralWins = referralWinsRows[0].count as number;
+  const position = Math.max(1, signupNumber - referralWins * 10);
+
+  let referrerNotify: JoinResult["referrerNotify"] = null;
+  if (isNew && validReferredBy) {
+    const referrerRows = await sql`
+      SELECT id, email, target_language FROM waitlist_entries WHERE referral_code = ${validReferredBy}
+    `;
+    if (referrerRows.length > 0) {
+      const referrer = referrerRows[0] as { id: number; email: string; target_language: string | null };
+      const referrerSignupNumber = initialCount + referrer.id;
+      // Referral counts *before* this signup vs. after, to know how far they jumped.
+      const referrerWinsBeforeRows = await sql`
+        SELECT COUNT(*)::int AS count FROM waitlist_entries
+        WHERE referred_by = ${validReferredBy} AND id < ${id}
+      `;
+      const winsBefore = referrerWinsBeforeRows[0].count as number;
+      const previousPosition = Math.max(1, referrerSignupNumber - winsBefore * 10);
+      const newPosition = Math.max(1, referrerSignupNumber - (winsBefore + 1) * 10);
+      referrerNotify = {
+        email: referrer.email,
+        targetLanguage: referrer.target_language ?? undefined,
+        previousPosition,
+        newPosition,
+      };
+    }
   }
 
-  const referralWins = Number((await redis(["HGET", "thelingo:referrals", code])) ?? 0);
-  return { signupNumber, position: Math.max(1, signupNumber - referralWins * 10), code };
+  return { signupNumber, position, code, isNew, referrerNotify };
 }
 
-function joinPreviewWaitlist(
-  email: string,
-  referringCode?: string,
-  qualifier?: { targetLanguage?: string; currentMethod?: string; previousFrustration?: string },
-) {
-  const initialCount = Number(process.env.WAITLIST_INITIAL_COUNT ?? 8);
+function joinPreviewWaitlist(email: string, referringCode: string | undefined, qualifier: Qualifier): JoinResult {
+  const initialCount = getInitialCount();
   const code = referralCode(email);
   let signupNumber = previewStore.positions.get(code);
+  let isNew = false;
 
   if (!signupNumber) {
+    isNew = true;
     signupNumber = initialCount + previewStore.positions.size + 1;
     previewStore.positions.set(code, signupNumber);
+    previewStore.order.push(code);
     if (referringCode && referringCode !== code) {
-      previewStore.referrals.set(
-        referringCode,
-        (previewStore.referrals.get(referringCode) ?? 0) + 1,
-      );
+      previewStore.referrals.set(referringCode, (previewStore.referrals.get(referringCode) ?? 0) + 1);
     }
   }
 
@@ -173,7 +166,22 @@ function joinPreviewWaitlist(
   }
 
   const referralWins = previewStore.referrals.get(code) ?? 0;
-  return { signupNumber, position: Math.max(1, signupNumber - referralWins * 10), code };
+  const position = Math.max(1, signupNumber - referralWins * 10);
+
+  let referrerNotify: JoinResult["referrerNotify"] = null;
+  if (isNew && referringCode && referringCode !== code && previewStore.positions.has(referringCode)) {
+    const referrerSignupNumber = previewStore.positions.get(referringCode)!;
+    const winsAfter = previewStore.referrals.get(referringCode) ?? 0;
+    const previousPosition = Math.max(1, referrerSignupNumber - (winsAfter - 1) * 10);
+    const newPosition = Math.max(1, referrerSignupNumber - winsAfter * 10);
+    referrerNotify = {
+      email: "", // No email store in memory-only preview mode.
+      previousPosition,
+      newPosition,
+    };
+  }
+
+  return { signupNumber, position, code, isNew, referrerNotify };
 }
 
 export async function POST(request: NextRequest) {
@@ -194,17 +202,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const qualifier = {
+    const qualifier: Qualifier = {
       targetLanguage: body.targetLanguage?.trim(),
       currentMethod: body.currentMethod?.trim(),
       previousFrustration: body.previousFrustration?.trim(),
     };
 
-    const hasPersistentStore = Boolean(
-      process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN,
-    );
+    const hasPersistentStore = isDatabaseConfigured();
     const result = hasPersistentStore
-      ? await joinPersistentWaitlist(email, body.ref, qualifier)
+      ? await joinPostgresWaitlist(email, body.ref, qualifier)
       : joinPreviewWaitlist(email, body.ref, qualifier);
 
     const record = {
@@ -219,10 +225,26 @@ export async function POST(request: NextRequest) {
       createdAt: new Date().toISOString(),
     };
 
-    // Trigger async handlers (Resend email, Webhook, Disk backup)
     await saveToLocalDiskStore(record);
     await triggerWebhook(record);
-    await sendResendConfirmation(email, qualifier.targetLanguage, result.code);
+
+    if (result.isNew) {
+      await sendConfirmationEmail({
+        email,
+        targetLanguage: qualifier.targetLanguage,
+        referralCode: result.code,
+        position: result.position,
+      });
+
+      if (result.referrerNotify && result.referrerNotify.email) {
+        await sendReferralJumpEmail({
+          email: result.referrerNotify.email,
+          targetLanguage: result.referrerNotify.targetLanguage,
+          previousPosition: result.referrerNotify.previousPosition,
+          newPosition: result.referrerNotify.newPosition,
+        });
+      }
+    }
 
     return NextResponse.json({
       ok: true,
@@ -231,8 +253,10 @@ export async function POST(request: NextRequest) {
       referralCode: result.code,
       revealPosition: result.signupNumber >= 10,
       previewMode: !hasPersistentStore,
+      tier: getTier(result.position),
     });
-  } catch {
+  } catch (err) {
+    console.error("Waitlist signup failed:", err);
     return NextResponse.json(
       { error: "Your spot could not be saved right now. Please try again." },
       { status: 500 },

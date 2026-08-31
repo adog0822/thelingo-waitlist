@@ -6,6 +6,10 @@ export function HeroSection() {
     <section className="hero" id="demo">
       <div className="hero-noise" aria-hidden="true" />
       <div className="hero-copy">
+        <span className="joined-pill">
+          <i aria-hidden="true" />
+          37 people joined yesterday
+        </span>
         <h1>Learning languages just became an e-sport.</h1>
         <p className="hero-subhead">
           Ranked matches to see your skills in action, your avatar speedruns your fluency, and a global community keeps you climbing together.

@@ -4,11 +4,14 @@ import Link from "next/link";
 import { FormEvent, useMemo, useRef, useState } from "react";
 import { ArrowIcon } from "./nav";
 
+type Tier = { name: string; emoji: string; threshold: number };
+
 type SignupResult = {
   position: number;
   referralCode: string;
   revealPosition: boolean;
   previewMode: boolean;
+  tier?: Tier;
 };
 
 const LANGUAGES = [
@@ -61,8 +64,8 @@ export function WaitlistForm({
 
   const shareUrl = useMemo(() => {
     if (!result) return "";
-    if (typeof window === "undefined") return `https://thelingo.app/waitlist?ref=${result.referralCode}`;
-    return `${window.location.origin}/waitlist?ref=${result.referralCode}`;
+    if (typeof window === "undefined") return `https://thelingo.xyz/?ref=${result.referralCode}`;
+    return `${window.location.origin}/?ref=${result.referralCode}`;
   }, [result]);
 
   async function handleInitialEmailSubmit(event: FormEvent<HTMLFormElement>) {
@@ -158,13 +161,21 @@ export function WaitlistForm({
             <p>We will email your first match invitation directly when the {targetLanguage} queue opens.</p>
           </>
         )}
+        {result.tier ? (
+          <div className="tier-badge">
+            <span className="tier-badge-label">Founding Member Badge</span>
+            <span className="tier-badge-name">
+              {result.tier.emoji} {result.tier.name}
+            </span>
+          </div>
+        ) : null}
         <div className="share-actions">
           <button type="button" onClick={copyInvite}>Copy invite link</button>
           <button type="button" className="share-primary" onClick={shareInvite}>
             Share link <ArrowIcon />
           </button>
         </div>
-        <span className="share-destinations">Your invite link gives priority entry to your study partners.</span>
+        <span className="share-destinations">Sharing moves you up 10 spots per signup - and we'll email you the moment it happens.</span>
         {result.previewMode ? (
           <small className="preview-note">Local preview mode active until database environment is configured.</small>
         ) : null}

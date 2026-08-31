@@ -4,7 +4,7 @@ import { SiteFooter } from "@/components/footer";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://thelingo.app"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "https://thelingo.xyz"),
   title: {
     default: "TheLingo | Practice Spanish & French Speaking Online with Real People",
     template: "%s | TheLingo",
@@ -25,15 +25,15 @@ const jsonLd = {
   "@graph": [
     {
       "@type": "Organization",
-      "@id": "https://thelingo.app/#organization",
+      "@id": "https://thelingo.xyz/#organization",
       name: "TheLingo",
-      url: "https://thelingo.app",
-      logo: "https://thelingo.app/icon.png",
+      url: "https://thelingo.xyz",
+      logo: "https://thelingo.xyz/icon.png",
       description: "Competitive ranked language learning platform featuring head-to-head duels and blind judging.",
     },
     {
       "@type": "SoftwareApplication",
-      "@id": "https://thelingo.app/#application",
+      "@id": "https://thelingo.xyz/#application",
       name: "TheLingo Platform",
       operatingSystem: "Web",
       applicationCategory: "EducationalApplication",

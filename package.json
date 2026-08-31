@@ -10,9 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
+    "resend": "^6.25.0",
     "wanakana": "^5.3.1"
   },
   "devDependencies": {
