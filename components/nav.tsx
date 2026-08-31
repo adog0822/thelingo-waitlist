@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ContactLink } from "./contact-link";
 
 export function BrandMark() {
   return (
@@ -24,7 +25,7 @@ export function SiteNav() {
         <a href="#demo">Interactive Demo</a>
         <a href="#world">Micro-Societies</a>
         <Link href="/privacy">Privacy Policy</Link>
-        <a href="mailto:lingot228@gmail.com">Contact</a>
+        <ContactLink />
       </nav>
       <a className="header-cta" href="#waitlist">
         Claim your rank <ArrowIcon />

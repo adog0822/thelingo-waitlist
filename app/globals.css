@@ -209,6 +209,107 @@ select:focus-visible {
   color: var(--blue);
 }
 
+/* Contact dropdown.
+   The trigger inherits the nav link treatment exactly, so it still reads as one
+   of the four nav items rather than as a control. */
+.contact-wrap {
+  position: relative;
+}
+
+.contact-trigger {
+  background: none;
+  border: 0;
+  color: #3f413e;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0;
+  transition: color var(--transition-fast);
+}
+
+.contact-trigger:hover,
+.contact-trigger[aria-expanded="true"] {
+  color: var(--coral-ink);
+}
+
+.contact-menu {
+  background: var(--white);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius-sm);
+  box-shadow: 4px 4px 0 var(--ink);
+  display: flex;
+  flex-direction: column;
+  left: 50%;
+  min-width: 210px;
+  padding: 6px;
+  position: absolute;
+  top: calc(100% + 14px);
+  transform: translateX(-50%);
+  z-index: 40;
+}
+
+.contact-menu-item {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 9px 10px;
+  text-align: left;
+  transition: background var(--transition-fast);
+  width: 100%;
+}
+
+.contact-menu-item:hover,
+.contact-menu-item:focus-visible {
+  background: var(--paper);
+}
+
+.contact-menu-address {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  margin: 6px 4px 2px;
+  padding-top: 8px;
+  word-break: break-all;
+}
+
+/* The header nav is a flex row of four links with no breakpoint, so at 390px it
+   ran to x=506 in a 390px viewport and forced 229px of horizontal scroll across
+   the whole site. Collapse it and keep the brand plus the CTA, which is the
+   only header element that matters on a phone. Every link lives in the footer,
+   including Contact. */
+@media (max-width: 860px) {
+  .site-header nav {
+    display: none;
+  }
+
+  .site-header {
+    grid-template-columns: 1fr auto;
+  }
+}
+
+/* Footer sits on the dark ink surface, so the trigger inherits the footer's
+   own link colour rather than the header's. */
+.site-footer .contact-trigger {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.site-footer .contact-menu {
+  left: 0;
+  transform: none;
+}
+
 .header-cta {
   align-items: center;
   background: var(--ink);

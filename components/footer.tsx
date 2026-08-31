@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ContactLink } from "./contact-link";
 import { BrandMark } from "./nav";
 
 export function SiteFooter() {
@@ -21,6 +22,9 @@ export function SiteFooter() {
             <a href="#demo">Interactive Demo</a>
             <a href="#world">Micro-Societies</a>
             <Link href="/privacy">Privacy Policy</Link>
+            {/* The header nav is hidden below 860px, so this is the only route
+                to Contact on a phone. */}
+            <ContactLink />
           </nav>
         </div>
       </div>
