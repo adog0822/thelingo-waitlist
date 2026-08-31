@@ -112,11 +112,32 @@ async function joinPostgresWaitlist(
     isNew = true;
   } else {
     const existing = await sql`SELECT id FROM waitlist_entries WHERE email = ${email}`;
+    if (existing.length === 0) throw new Error("Row vanished between insert and read.");
     id = existing[0].id as number;
     isNew = false;
+    // Their language choice would otherwise be silently discarded on a repeat
+    // submit, leaving the confirmation email describing the OLD language.
+    await sql`
+      UPDATE waitlist_entries
+      SET target_language = COALESCE(${qualifier.targetLanguage ?? null}, target_language),
+          current_method = COALESCE(${qualifier.currentMethod ?? null}, current_method),
+          previous_frustration = COALESCE(${qualifier.previousFrustration ?? null}, previous_frustration)
+      WHERE id = ${id}
+    `;
   }
 
-  const signupNumber = initialCount + id;
+  // Rank is this row's ORDINAL position, not its raw serial id.
+  // `INSERT ... ON CONFLICT DO NOTHING` still consumes the sequence, so ids
+  // develop gaps (currently 2 rows but sequence at 13). Using the raw id made
+  // rank outrun the public headcount: the site said "39 people on the waitlist"
+  // while telling someone they were "#42 in line". Counting rows at or before
+  // this one keeps rank and total derived from the same fact, so the newest
+  // signup is always exactly the last position.
+  const ordinalRows = await sql`
+    SELECT COUNT(*)::int AS n FROM waitlist_entries WHERE id <= ${id}
+  `;
+  const ordinal = (ordinalRows[0].n as number) ?? 1;
+  const signupNumber = initialCount + ordinal;
   const referralWinsRows = await sql`SELECT COUNT(*)::int AS count FROM waitlist_entries WHERE referred_by = ${code}`;
   const referralWins = referralWinsRows[0].count as number;
   const position = Math.max(1, signupNumber - referralWins * 10);
@@ -128,7 +149,12 @@ async function joinPostgresWaitlist(
     `;
     if (referrerRows.length > 0) {
       const referrer = referrerRows[0] as { id: number; email: string; target_language: string | null };
-      const referrerSignupNumber = initialCount + referrer.id;
+      // Same ordinal basis as above, otherwise the referrer's "you moved up"
+      // email quotes a position that does not exist on the site.
+      const referrerOrdinalRows = await sql`
+        SELECT COUNT(*)::int AS n FROM waitlist_entries WHERE id <= ${referrer.id}
+      `;
+      const referrerSignupNumber = initialCount + ((referrerOrdinalRows[0].n as number) ?? 1);
       // Referral counts *before* this signup vs. after, to know how far they jumped.
       const referrerWinsBeforeRows = await sql`
         SELECT COUNT(*)::int AS count FROM waitlist_entries

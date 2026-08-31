@@ -162,11 +162,24 @@ export function WaitlistForm({
         </div>
 
         <span className="success-check" aria-hidden="true">✓</span>
+        {/* A repeat submit used to render an identical "Placement Confirmed",
+            so re-entering an email you had already used looked like a brand new
+            signup while the headcount correctly did not move. That mismatch is
+            what makes the page look broken. Say which one happened. */}
         {result.revealPosition ? (
           <>
-            <p className="success-kicker">Placement Confirmed</p>
-            <h3>You are #{result.position.toLocaleString()} in line for {targetLanguage}.</h3>
-            <p>Placement matches open in sign-up order. Share your link to jump ahead by 10 spots for each friend who signs up.</p>
+            <p className="success-kicker">
+              {result.isNew === false ? "Already On The List" : "Placement Confirmed"}
+            </p>
+            <h3>
+              {result.isNew === false ? "You're already #" : "You are #"}
+              {result.position.toLocaleString()} in line for {targetLanguage}.
+            </h3>
+            <p>
+              {result.isNew === false
+                ? "That email was already registered, so your original spot is unchanged. Share your link to jump ahead by 10 spots for each friend who signs up."
+                : "Placement matches open in sign-up order. Share your link to jump ahead by 10 spots for each friend who signs up."}
+            </p>
           </>
         ) : (
           <>
